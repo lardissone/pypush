@@ -37,7 +37,7 @@ class PypushHandler(watchdog.events.FileSystemEventHandler):
             print 'Error: cannot use flags -s and -e together.'
             sys.exit(1)
 
-        self.user = flags.user
+        self.user = flags.user  # in S3 it's the bucket name
         self.path = flags.dest
         self.quiet = flags.quiet
         self.verbose = flags.verbose
@@ -49,17 +49,26 @@ class PypushHandler(watchdog.events.FileSystemEventHandler):
         if self.path[-1] != '/':  # Ensure path ends in a slash, i.e. it is a directory
             self.path += '/'
 
-        args = ['ssh', '-t', '-t',  # Force tty allocation - this prevents certain error messages
-            '-M', '-S', '~/.ssh/socket-%r@%h:%p',  # Create a master TCP connection that we can use later every time a file changes
-            '-fN',  # Go to the background when the connection is established - so after this command returns, we can be sure that the master connection has been created
-            '-p', self.port,
-            self.user]
-        if subprocess.call(args):
-            print 'Error with ssh, aborting'
-            sys.exit(1)
+        if flags.amazonS3:
+            self.s3 = True
+            args = ['s3cmd', 'ls', 's3://%s/' % self.user]
+            process = subprocess.call(args, stdout=subprocess.PIPE)
+            if process != 0:
+                print 'Error with s3cmd, does it exist?\nIf not, install it from: http://s3tools.org/'
+                sys.exit(1)
+        else:
+            args = ['ssh', '-t', '-t',  # Force tty allocation - this prevents certain error messages
+                '-M', '-S', '~/.ssh/socket-%r@%h:%p',  # Create a master TCP connection that we can use later every time a file changes
+                '-fN',  # Go to the background when the connection is established - so after this command returns, we can be sure that the master connection has been created
+                '-p', self.port,
+                self.user]
 
-        atexit.register(subprocess.call, ['ssh', '-O', 'exit', '-S',
-            '~/.ssh/socket-%r@%h:%p', '-p', self.port, self.user], stderr=subprocess.PIPE)  # Close the master connection before exiting
+            if subprocess.call(args):
+                print 'Error with ssh, aborting'
+                sys.exit(1)
+
+            atexit.register(subprocess.call, ['ssh', '-O', 'exit', '-S',
+                '~/.ssh/socket-%r@%h:%p', '-p', self.port, self.user], stderr=subprocess.PIPE)  # Close the master connection before exiting
 
         if flags.skip_init:
             print 'Waiting for file changes\n'
@@ -93,17 +102,31 @@ class PypushHandler(watchdog.events.FileSystemEventHandler):
                     tf.write('/' + line + '\n')
             tf.close()
 
-        args = ['rsync', '-az',  # Usual flags - archive, compress
-            '-e', 'ssh -S ~/.ssh/socket-%r@%h:%p -p ' + self.port,  # Connect to the master connection from earlier
-            './',  # Sync current directory
-            self.user + ':' + self.escape(self.path)]
+        if self.s3:
+            args = [
+                's3cmd',
+                'sync',
+                '--recursive',
+                './',
+                's3://%s%s' % (self.user, self.escape(self.path))]
+        else:
+            args = ['rsync', '-az',  # Usual flags - archive, compress
+                '-e', 'ssh -S ~/.ssh/socket-%r@%h:%p -p ' + self.port,  # Connect to the master connection from earlier
+                './',  # Sync current directory
+                self.user + ':' + self.escape(self.path)]
 
         if self.vcs:
-            args.append('--exclude-from=' + tf.name)
-            if not self.keep_extra:
+            if self.s3:
+                args.insert(3, '--exclude-from=' + tf.name)
+            else:
+                args.append('--exclude-from=' + tf.name)
+            if not self.keep_extra and not self.s3:
                 args.append('--delete-excluded')
         elif not self.keep_extra:
-            args.append('--delete')
+            if self.s3:
+                args.append('--delete-removed')
+            else:
+                args.append('--delete')
         if self.verbose:
             args.append('-v')
 
@@ -172,7 +195,16 @@ class PypushHandler(watchdog.events.FileSystemEventHandler):
         """Call rsync on the given relative path."""
         if output:
             self.print_quiet(output, False)
-        args = ['rsync', '-az', '-e', 'ssh -S ~/.ssh/socket-%r@%h:%p -p ' + self.port, path, self.user + ':' + self.escape(self.path + path)]
+        if self.s3:
+            args = [
+                's3cmd',
+                'put',
+                '--recursive',
+                path,
+                's3://%s/%s' % (self.user, self.escape(path))
+            ]
+        else:
+            args = ['rsync', '-az', '-e', 'ssh -S ~/.ssh/socket-%r@%h:%p -p ' + self.port, path, self.user + ':' + self.escape(self.path + path)]
         if self.verbose:
             args.append('-v')
         subprocess.call(args)
@@ -187,7 +219,14 @@ class PypushHandler(watchdog.events.FileSystemEventHandler):
             # Try to move src to dest on the remote with ssh and mv. Then call
             # rsync on it, in case either src was changed on the remote, or it
             # didn't exist.
-            args = ['ssh', '-S', '~/.ssh/socket-%r@%h:%p', '-p', self.port, self.user, 'mv ' + self.escape(self.path + src) + ' ' + self.escape(self.path + dest)]
+            if self.s3:
+                args = [
+                    's3cmd',
+                    'del',
+                    's3://%s%s' % (self.user, self.escape(self.path + src))
+                ]
+            else:
+                args = ['ssh', '-S', '~/.ssh/socket-%r@%h:%p', '-p', self.port, self.user, 'mv ' + self.escape(self.path + src) + ' ' + self.escape(self.path + dest)]
             subprocess.call(args, stderr=subprocess.PIPE)
             self.on_modified(dest)
         self.print_quiet('...pushed')
@@ -224,11 +263,13 @@ def main():
         help='keep files on the remote that do not exist locally')
 
     parser.add_argument('--version', action='version', version='%(prog)s 1.3')
+
+    parser.add_argument('-s3', '--amazonS3', action='store_true', help="Use Amazon S3 as destination")
     parser.add_argument('user', metavar='user@hostname', help='the remote machine (and optional user name) to login to')
     # The user argument is passed on to rsync and ssh, so actually the 'user@'
     # part is optional, but using metavar='[user@]hostname' causes an error
     # because of a bug in argparse - see http://bugs.python.org/issue11874
-    parser.add_argument('dest', help='the path to the remote directory to push changes to')
+    parser.add_argument('dest', help='the path to the remote directory to push changes to (or bucket if -s3 used)')
     args = parser.parse_args()
 
     observer = watchdog.observers.Observer()
