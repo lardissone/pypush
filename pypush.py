@@ -246,6 +246,7 @@ def main():
         epilog="""WARNING: pypush only performs a one-way sync. If you make
             changes directly on the remote machine, they may be overwritten at
             any time by changes made locally.""")
+    parser.add_argument('-s3', '--amazonS3', action='store_true', help="Use Amazon S3 as destination")
     parser.add_argument('-q', '--quiet', action='store_true',
         help='quiet mode - do not show output whenever a file changes')
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -264,7 +265,6 @@ def main():
 
     parser.add_argument('--version', action='version', version='%(prog)s 1.3')
 
-    parser.add_argument('-s3', '--amazonS3', action='store_true', help="Use Amazon S3 as destination")
     parser.add_argument('user', metavar='user@hostname', help='the remote machine (and optional user name) to login to')
     # The user argument is passed on to rsync and ssh, so actually the 'user@'
     # part is optional, but using metavar='[user@]hostname' causes an error

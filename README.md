@@ -26,6 +26,9 @@ installed. If you are interested in getting it to work on Windows, [open a new
 issue](https://github.com/viveksjain/pypush/issues/new). The remote machine must
 have `rsync` installed.
 
+Note: for using with Amazon S3, you don't need `rsync` but you need `s3cmd` from
+!(http://s3tools.org/)[http://s3tools.org/] and previously configured.
+
 Installation
 ------------
 Pypush can be installed using `pip`:
@@ -39,7 +42,7 @@ Or you can use `easy_install`:
 Usage
 -----
 ```
-usage: pypush [-h] [-q] [-v] [-s] [-i] [-e] [-a] [-p PORT] [-k] [--version]
+usage: pypush [-h] [-s3] [-q] [-v] [-s] [-i] [-e] [-a] [-p PORT] [-k] [--version]
               user@hostname dest
 
 Continuously push changes in the current directory to a remote server. If this
@@ -48,11 +51,12 @@ be pushed.
 
 positional arguments:
   user@hostname         the remote machine (and optional user name) to login
-                        to
+                        to (if Amazon S3 used, it's just the bucket name)
   dest                  the path to the remote directory to push changes to
 
 optional arguments:
   -h, --help            show this help message and exit
+  -s3, --amazonS3       use Amazon S3 instead
   -q, --quiet           quiet mode - do not show output whenever a file
                         changes
   -v, --verbose         verbose mode - run rsync in verbose mode
@@ -74,6 +78,10 @@ locally.
 Example:
 
 	pypush viveksjain@myserver.com '~/www'
+
+or using Amazon S3:
+
+  pypush -s3 bucket-name './www'
 
 Stop pypush by pressing `Ctrl+C`.
 
